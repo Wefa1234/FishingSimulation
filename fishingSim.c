@@ -70,6 +70,53 @@ void printMap(const gridType *map)
     }
     printf("\n\n");
 }
+void writeMap(MPI_Info info, char *fileName, MPI_File fh ,const gridType *map, double *timer, int step)
+{   
+    MPI_Status status;
+    MPI_Info_create(&info);
+    MPI_File_open(MPI_COMM_WORLD, fileName,MPI_MODE_CREATE | MPI_MODE_RDWR,info,&fh);
+
+    char tile[2];
+    char header[20];// Step: 100, time: 100
+    double current_t = MPI_Wtime();
+    snprintf(header,20,"Step: %d, time: %1.2f", step,current_t-*timer);
+    MPI_File_write(fh, header,strlen(header), MPI_CHAR,&status);
+    for (int i = 0; i < SIZE; i++)
+    {
+        switch (map[i])
+        {
+        case 0:
+            snprintf(tile,2,"~~");
+            break;
+        case 1:
+            snprintf(tile,2,"⚓");
+            break;
+        case 2:
+            snprintf(tile,2,"🐟");
+            break;
+        case 3:
+            snprintf(tile,2,"🐳");
+            break;
+        case 4:
+            snprintf(tile,2,"🚤");
+            break;
+        case 5:
+            snprintf(tile,2,"🦆");
+            break;
+        case 6:
+            snprintf(tile,2,"🐟");
+            break;
+        }
+	MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
+        if (i != 0 && i % DIMX == DIMX - 1){
+            snprintf(tile,2,"\n");
+	    MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
+ 	}
+    }
+    snprintf(tile,2,"\n\n");
+    MPI_File_write(fh, tile,strlen(tile), MPI_CHAR,&status);
+    MPI_File_close(&fh);
+}
 
 void printArray(const gridType *map)
 {
@@ -189,7 +236,7 @@ int moveBoat(const int *nbrs, const int *forbiddenPos, const int harborPos)
     return nbrs[idx];
 }
 
-int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPos, const int rank,int *fishCount)
+int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPos, const int rank,int *fishCount, double *timer)
 {  
     int free = 0;
     int idx;
@@ -204,8 +251,16 @@ int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPo
     if(dir[0]*dir[0]+dir[1]*dir[1]==1){
         (*fishCount) = 0;
         printf("setting fishcount to 0\n");
+
+        //calculate fishing time 
+        double current_t = MPI_Wtime();      
+        //printf("Timer from function %1.2f.\n",*timer); //test printing  
+	//printf("Current time from fuction %1.2f. \n",current_t);
+        printf("Boat took %1.2f seconds to fill the nets and return to the harbor.\n",current_t-*timer);
+        (*timer) = MPI_Wtime(); //reset timer 
+                
     }
-    printf("dir %d,%d\n", dir[0],dir[1]);
+    //printf("dir %d,%d\n", dir[0],dir[1]);
     while (!free)
     {
         if(dir[0] != 0 && count == 0){  //first try to move the boat to the row of the harbor
@@ -223,8 +278,8 @@ int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPo
         }else{  // if both movements towards harbor are blocked pick random dir
             idx = rand() % 4;
         }
-        printf("idx = %d \n",idx);
-        printf("target cell %d\n",nbrs[idx]);
+       //printf("idx = %d \n",idx);
+       //printf("target cell %d\n",nbrs[idx]);
         if (!contains(forbiddenPos, nbrs[idx]) && nbrs[idx] != harborPos) // TODO: ADD harbor avoidance
         {
             free = 1;
@@ -266,7 +321,7 @@ int getObjPos(const gridType *map, const int type)
 void logger(MPI_Info info, char *fileName, MPI_File fh, char *text){
     MPI_Status status;
     MPI_Info_create(&info);
-    printf("Func Logger called\n");
+    //printf("Func Logger called\n");
     MPI_File_open(MPI_COMM_WORLD, fileName,MPI_MODE_CREATE | MPI_MODE_RDWR,info,&fh);
     char buf[42];
     time_t t = t;
@@ -305,7 +360,10 @@ int main(int argc, char **argv)
 
     MPI_File fh;
     MPI_Info fileInfo;
-    char *fileName = "log";
+    char *fileName = "log.txt";
+
+    // timer variables
+    double timer_boat1, timer_boat2, timer_global;
 
     MPI_Request reqs[8];
     //MPI_Request reqsBoats;
@@ -352,6 +410,11 @@ int main(int argc, char **argv)
     MPI_Cart_shift(cartcomm, 0, 1, &nbrs[UP], &nbrs[DOWN]);
     MPI_Cart_shift(cartcomm, 1, 1, &nbrs[LEFT], &nbrs[RIGHT]);
 
+    //start fishing timers and global timer
+    timer_boat1 = MPI_Wtime();
+    timer_boat2 = MPI_Wtime();
+    timer_global = MPI_Wtime();
+
     for (int timeStep = 0; timeStep < 100; timeStep++)
     {
         outbuf[0] = 0;
@@ -363,7 +426,7 @@ int main(int argc, char **argv)
             boatPosNew[1] = -1;
         }
         if(state == fishfish){
-            printf("FISH FISH!\n");
+            //printf("FISH FISH!\n");
         }
         if (state == land)
         {
@@ -414,11 +477,10 @@ int main(int argc, char **argv)
             if(info[1]<netCapacity){
                 boatPosNew[0] = moveBoat(nbrs, forbiddenPos, harborPos);
             }else{
-                printf("Moving Boat to Harbor\n");
-                
+                printf("Moving Boat 1 to Harbor\n");
+		
                 pointer = &info[1];
-                boatPosNew[0] = moveBoat2Harbor(nbrs, forbiddenPos, harborPos,rank,pointer);
-                
+                boatPosNew[0] = moveBoat2Harbor(nbrs, forbiddenPos, harborPos, rank, pointer, &timer_boat1);
             }
 
             for (i = 0; i < 4; i++)
@@ -459,7 +521,16 @@ int main(int argc, char **argv)
             MPI_Recv(forbiddenPos, 4, MPI_INT, harborPos, tag, MPI_COMM_WORLD, &statusBoats); //, &reqsBoats[0]); //cant use Irec/Isend since we need forbiddenPos before we continue
             // calculate new target pos
 
-            boatPosNew[1] = moveBoat(nbrs, forbiddenPos, harborPos);
+            if(info[1]<netCapacity){
+                boatPosNew[1] = moveBoat(nbrs, forbiddenPos, harborPos);
+            }else{
+                printf("Moving Boat 2 to Harbor\n");
+                
+                pointer = &info[1];
+                boatPosNew[1] = moveBoat2Harbor(nbrs, forbiddenPos, harborPos, rank, pointer, &timer_boat2);
+                
+            }            
+
             for (i = 0; i < 4; i++)
             {
                 if (nbrs[i] == boatPosNew[1])
@@ -472,7 +543,7 @@ int main(int argc, char **argv)
             MPI_Send(&helper, 1, MPI_INT, harborPos, tag, MPI_COMM_WORLD);
             
             
-            printf("Recieved following info:%d,%d\n",info[0],info[1]);
+            //printf("Recieved following info:%d,%d\n",info[0],info[1]);
             switch(gotFish){
                 case fish1: info[1]++; break;
                 case fish2: info[1]++; break;
@@ -522,7 +593,7 @@ int main(int argc, char **argv)
             do{
                 fish1Dest = moveFish(nbrs, harborPos);
             }while(boatPosNew[0] == fish1Dest || boatPosNew[1] == fish1Dest);
-            printf("I am fish fish\n");
+            //printf("I am fish fish\n");
             
             do{
                 fish2Dest = moveFish(nbrs, harborPos);
@@ -569,24 +640,24 @@ int main(int argc, char **argv)
             }
             for(i=i;i<4;i++){
                 if(inbuf[i]!= water){
-                    printf("Multiple states recv \n");
-                    printf("rank= %d with coords= (%d,%d) has received the following states from its neighbors (u,d,l,r)= %d %d %d %d \n", rank,coords[0],coords[1], inbuf[0], inbuf[1], inbuf[2], inbuf[3] );
+                   //printf("Multiple states recv \n");
+                   //printf("rank= %d with coords= (%d,%d) has received the following states from its neighbors (u,d,l,r)= %d %d %d %d \n", rank,coords[0],coords[1], inbuf[0], inbuf[1], inbuf[2], inbuf[3] );
                     if ((state == fish1 || state==fish2) && (inbuf[i] == fish1 || inbuf[i]==fish2) ){
                         state = fishfish;
-                        printf("Went to case recv second fish\n");
+                        //printf("Went to case recv second fish\n");
                     }
                     if((state == fish1 || state == fish2 || state == fishfish) && inbuf[i]>fish2){
                         gotFish = state;
                         state = inbuf[i];
-                        printf("Went to case recv boat after fish\n");
+                        //printf("Went to case recv boat after fish\n");
                     }
                     if((state == boat1 || state == boat2) && inbuf[i]<boat1){
                         if(gotFish != 0){
                             gotFish = fishfish;
-                            printf("Went to case recv fish after boat and had fish already\n");
+                            //printf("Went to case recv fish after boat and had fish already\n");
                         }else{
                             gotFish = inbuf[i];
-                            printf("Went to case recv fish after boat\n");
+                            //printf("Went to case recv fish after boat\n");
                         }
                     }
                 }
@@ -601,14 +672,15 @@ int main(int argc, char **argv)
         {
             // printMap(map);
             // printf("\n");
+            //writeMap(fileInfo, fileName, fh , recvBuff, &timer_global, timeStep);
             printMap(recvBuff);
         }
         MPI_Barrier(MPI_COMM_WORLD);
     }
 
-    char *event = "Testing logging...";
+    //char *event = "Testing logging...";
     
-    logger(fileInfo, fileName, fh, event);
+    //logger(fileInfo, fileName, fh, event);
 
     MPI_Finalize();
     return 0;
