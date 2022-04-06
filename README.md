@@ -18,5 +18,5 @@ Finaly use command
 ```bash
 git push origin
 ```
-Github username and password are needed when pushing but for some reason, the password ain't good enough so a personal access token is needed. [Here] is (https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token) is instructions for that.
+Github username and password are needed when pushing but for some reason, the password ain't good enough so a personal access token is needed. [Here](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token) is instructions for that.
 
