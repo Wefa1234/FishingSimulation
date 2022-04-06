@@ -4,7 +4,7 @@ HPC-course assignment 2.
 ## Unix commands
 Clone repository
 ```bash
-git clone http://.../reponame.git
+git clone https://github.com/Wefa1234/FishingSimulation.git
 ```
 After editing use
 ```bash
