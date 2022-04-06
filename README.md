@@ -2,7 +2,7 @@
 HPC-course assignment 2.
 
 ## Unix commands
-Clone repository
+Clone repository to Unix with the command:
 ```bash
 git clone https://github.com/Wefa1234/FishingSimulation.git
 ```
