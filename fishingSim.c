@@ -73,52 +73,50 @@ void printMap(const gridType *map)
     }
     printf("\n\n");
 }
-void writeMap(MPI_Info info, char *fileName, MPI_File fh ,const gridType *map, double *timer, int step)
-{   
-    MPI_Status status;
-    MPI_Info_create(&info);
-    MPI_File_open(MPI_COMM_WORLD, fileName,MPI_MODE_CREATE | MPI_MODE_RDWR,info,&fh);
-
-    char tile[2];
-    char header[20];// Step: 100, time: 100
+void writeMap(char *fileName, MPI_File fh ,const gridType *map, double *timer, int step)
+{
+    char tile[36];
+    char header[128];
     double current_t = MPI_Wtime();
-    snprintf(header,20,"Step: %d, time: %1.2f", step,current_t-*timer);
+    MPI_Status status;
+
+    snprintf(header,128,"Iteration step: %03d, time: %05.2fs   |\n", step,current_t-*timer);
     MPI_File_write(fh, header,strlen(header), MPI_CHAR,&status);
     for (int i = 0; i < SIZE; i++)
     {
         switch (map[i])
         {
         case 0:
-            snprintf(tile,2,"~~");
+            snprintf(tile,36,"~~");
             break;
         case 1:
-            snprintf(tile,2,"⚓");
+            snprintf(tile,36,"⚓");
             break;
         case 2:
-            snprintf(tile,2,"🐟");
+            snprintf(tile,36,"🐟");
             break;
         case 3:
-            snprintf(tile,2,"🐳");
+            snprintf(tile,36,"🐳");
             break;
         case 4:
-            snprintf(tile,2,"🚤");
+            snprintf(tile,36,"🚤");
             break;
         case 5:
-            snprintf(tile,2,"🦆");
+            snprintf(tile,36,"🦆");
             break;
         case 6:
-            snprintf(tile,2,"🐟");
+            snprintf(tile,36,"🐟");
             break;
         }
-	MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
+        MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
+
         if (i != 0 && i % DIMX == DIMX - 1){
-            snprintf(tile,2,"\n");
-	    MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
- 	}
+            snprintf(tile,36,"                        |\n");
+            MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
+        }
     }
-    snprintf(tile,2,"\n\n");
-    MPI_File_write(fh, tile,strlen(tile), MPI_CHAR,&status);
-    MPI_File_close(&fh);
+    snprintf(header,36,"\n\n");
+    MPI_File_write(fh, header,strlen(header), MPI_CHAR,&status);
 }
 
 void printArray(const gridType *map)
@@ -250,7 +248,7 @@ int moveBoat(const int *nbrs, const int *forbiddenPos, const int harborPos)
     return nbrs[idx];
 }
 
-int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPos, const int rank,int *fishCount, double *timer)
+int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPos, const int rank,int *fishCount, double *timer, MPI_File fh, MPI_Status status, int step)
 {  
     int free = 0;
     int idx;
@@ -258,6 +256,7 @@ int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPo
     int dir[2];
     int harbor[2];
     int boat[2];
+    char message[128];
     convertIdx2Coords(harborPos, harbor);  // get coords of harbor
     convertIdx2Coords(rank, boat);  //get coords of boat
     dir[0] = harbor[0]-boat[0];   // calculate direction to harbor
@@ -271,6 +270,8 @@ int moveBoat2Harbor(const int *nbrs, const int *forbiddenPos, const int harborPo
         //printf("Timer from function %1.2f.\n",*timer); //test printing  
 	//printf("Current time from fuction %1.2f. \n",current_t);
         printf("Boat took %1.2f seconds to fill the nets and return to the harbor.\n",current_t-*timer);
+	snprintf(message,128,"Boat arrived to harbor.        Iteration step: %03d. \n", step);
+        MPI_File_write_shared(fh, message, strlen(message), MPI_CHAR, &status);
         (*timer) = MPI_Wtime(); //reset timer 
                 
     }
@@ -443,11 +444,6 @@ int main(int argc, char **argv)
     double waveHeight, waveHeightNew;
     double waveMap[SIZE] = {0};
     
-
-    MPI_File fh;
-    MPI_Info fileInfo;
-    char *fileName = "log.txt";
-
     // timer variables
     double timer_boat1, timer_boat2, timer_global;
 
@@ -500,6 +496,22 @@ int main(int argc, char **argv)
     timer_boat1 = MPI_Wtime();
     timer_boat2 = MPI_Wtime();
     timer_global = MPI_Wtime();
+    //initialize MPI i/o
+    MPI_File fhMap;
+    MPI_Info fileInfoMap;
+    MPI_Status statusMap;
+    MPI_File fhParallel;
+    MPI_Info fileInfoParallel;
+    MPI_Status statusParallel;
+    char *fileNameMap = "MapLog";
+    char *fileNameParallel = "ParallelLog";
+    char eventMessage[128];
+    MPI_Info_create(&fileInfoMap);
+    MPI_File_open(MPI_COMM_WORLD, fileNameMap, MPI_MODE_CREATE | MPI_MODE_RDWR, fileInfoMap, &fhMap);
+
+    MPI_Info_create(&fileInfoParallel);
+    MPI_File_open(MPI_COMM_WORLD, fileNameParallel, MPI_MODE_CREATE | MPI_MODE_RDWR, fileInfoParallel, &fhParallel);
+
 
     for (int timeStep = 0; timeStep < 100; timeStep++)
     {
@@ -542,6 +554,9 @@ int main(int argc, char **argv)
                             forbiddenPos[k] = j;
                             printf("added stormcells\n");
                             found = 1;
+			    //write event to log file
+			    snprintf(eventMessage,128,"Storm detected!                Iteration step: %03d.\n",timeStep);
+                            MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
                         }else if(k==2 && !found){
                             printf("didnt add storm cell as to not block boat\n");
                         }
@@ -583,9 +598,12 @@ int main(int argc, char **argv)
                 boatPosNew[0] = moveBoat(nbrs, forbiddenPos, harborPos);
             }else{
                 printf("Moving Boat 1 to Harbor\n");
+		//write event to file
+		snprintf(eventMessage,128,"Moving boat 1 to harbor.       Iteration step: %03d.\n",timeStep);
+                MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
 		
                 pointer = &info[1];
-                boatPosNew[0] = moveBoat2Harbor(nbrs, forbiddenPos, harborPos, rank, pointer, &timer_boat1);
+                boatPosNew[0] = moveBoat2Harbor(nbrs, forbiddenPos, harborPos, rank, pointer, &timer_boat1, fhParallel, statusParallel ,timeStep);
             }
 
             for (i = 0; i < 4; i++)
@@ -605,9 +623,23 @@ int main(int argc, char **argv)
             //check if caught fish
             if(info[1]<netCapacity){
                 switch(gotFish){
-                    case fish1: info[1]++; break;
-                    case fish2: info[1]++; break;
-                    case fishfish: info[1] += 2; break;
+                    case fish1:
+                        info[1]++;
+                        snprintf(eventMessage,128,"Boat 1 here, we caught %d fish. Iteration step: %03d.\n",info[1], timeStep);
+                        MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
+                        break;
+
+                    case fish2:
+                        info[1]++;
+                        snprintf(eventMessage,128,"Boat 1 here, we caught %d fish. Iteration step: %03d.\n",info[1], timeStep);
+                        MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
+                        break;
+
+                    case fishfish:
+                         info[1] += 2;
+                         snprintf(eventMessage,128,"Boat 1 here, we caught %d fish. Iteration step: %03d.\n",info[1], timeStep);
+                         MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
+                         break;
                     default: break;
                 }
             }
@@ -630,9 +662,12 @@ int main(int argc, char **argv)
                 boatPosNew[1] = moveBoat(nbrs, forbiddenPos, harborPos);
             }else{
                 printf("Moving Boat 2 to Harbor\n");
+		// write event to file
+		snprintf(eventMessage,128,"Moving boat 2 to harbor.       Iteration step: %03d.\n",timeStep);
+                MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
                 
                 pointer = &info[1];
-                boatPosNew[1] = moveBoat2Harbor(nbrs, forbiddenPos, harborPos, rank, pointer, &timer_boat2);
+                boatPosNew[1] = moveBoat2Harbor(nbrs, forbiddenPos, harborPos, rank, pointer, &timer_boat2, fhParallel, statusParallel,timeStep);
                 
             }            
 
@@ -651,9 +686,23 @@ int main(int argc, char **argv)
             //printf("Recieved following info:%d,%d\n",info[0],info[1]);
             if(info[1]<netCapacity){
                 switch(gotFish){
-                    case fish1: info[1]++; break;
-                    case fish2: info[1]++; break;
-                    case fishfish: info[1] += 2; break;
+                    case fish1:
+                        info[1]++;
+                        snprintf(eventMessage,128,"Boat 2 here, we caught %d fish. Iteration step: %03d.\n",info[1], timeStep);
+                        MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
+                        break;
+
+                    case fish2:
+                        info[1]++;
+                        snprintf(eventMessage,128,"Boat 2 here, we caught %d fish. Iteration step: %03d.\n",info[1], timeStep);
+                        MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
+                        break;
+
+                    case fishfish:
+                         info[1] += 2;
+                         snprintf(eventMessage,128,"Boat 2 here, we caught %d fish. Iteration step: %03d.\n",info[1], timeStep);
+                         MPI_File_write_shared(fhParallel, eventMessage, strlen(eventMessage), MPI_CHAR, &statusParallel);
+                         break;
                     default: break;
                 }
             }
@@ -756,23 +805,19 @@ int main(int argc, char **argv)
         MPI_Gather(&state, 1, MPI_INT, &recvBuff, 1, MPI_INT, 0, MPI_COMM_WORLD);
         if (rank == 0)
         {
-            // printMap(map);
-            // printf("\n");
-            //writeMap(fileInfo, fileName, fh , recvBuff, &timer_global, timeStep);
+            writeMap(fileNameMap, fhMap, recvBuff, &timer_global, timeStep);
             printMap(recvBuff);
         }
-        /* UNCOMMENT TO SEE WAVES
+        // UNCOMMENT TO SEE WAVES
         if(rank == harborPos){
             printDoubleArray(waveMap);
         }
-        */
+        
         MPI_Barrier(MPI_COMM_WORLD);
     }
 
-    //char *event = "Testing logging...";
-    
-    //logger(fileInfo, fileName, fh, event);
-
+    MPI_File_close(&fhMap);
+    MPI_File_close(&fhParallel);
     MPI_Finalize();
     return 0;
 }
