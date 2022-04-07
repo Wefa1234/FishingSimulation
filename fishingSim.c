@@ -3,12 +3,15 @@
 #include <time.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 //#define DEBUG
 
 /*
 TO DO:
 - add time logs
+-extend forbiddencells
+-catch exception if boat cant move
 - add wave propagation -> Left border cells use sine function to get a new wave 
    value which is then allways passed to the rigth neighbor.
    Add Offset to get a diagonal wave going through map.
@@ -128,6 +131,17 @@ void printArray(const gridType *map)
     }
     printf("\n");
     printf("Legend: 1:land, 2:fish1, 3:fish2, 4:boat1, 5:boat2\n");
+}
+
+void printDoubleArray(const double *map)
+{
+    for (int i = 0; i < SIZE; i++)
+    {
+        printf("%.2f  ", map[i]);
+        if (i != 0 && i % DIMX == DIMX - 1)
+            printf("\n");
+    }
+    printf("\n");
 }
 
 void setUpMap(gridType *map)
@@ -331,6 +345,71 @@ void logger(MPI_Info info, char *fileName, MPI_File fh, char *text){
     MPI_File_close(&fh);
 }
 
+double randfrom(double min, double max) 
+{
+    double range = (max - min); 
+    double div = RAND_MAX / range;
+    return min + (rand() / div);
+}
+
+double generateWave(const int timestep,const int rank){
+    double height;
+    double a = 1;
+    
+    double PI2 = 2*M_PI;
+    double k = PI2/DIMX;
+    double omega = PI2/DIMX;
+    //double k = 2*pi/lambda; //lambda is wavelength in m
+    //double omega = 2*pi/T // T is period in s
+    height = a*sin(k*timestep+rank)+a+randfrom(0,0.2);
+    return height;
+}
+
+void updateState(int *inbuf, int *state, int *gotFish){
+    if ((*state) != land)
+        {
+            (*gotFish) = 0;
+            (*state) = water;
+            int i = 0;
+            while((*state) == water && i<4){
+                switch(inbuf[i]){
+                    case boat1: (*state) = boat1; break;
+                    case boat2: (*state) = boat2; break;
+                    case fish1: (*state) = fish1; break;
+                    case fish2: (*state) = fish2; break;
+                    default: break;
+                }
+                i++;
+            }
+            // In case multiple objects recv
+            for(i=i;i<4;i++){
+                if(inbuf[i]!= water){
+                   //printf("Multiple states recv \n");
+                   //printf("rank= %d with coords= (%d,%d) has received the following states from its neighbors (u,d,l,r)= %d %d %d %d \n", rank,coords[0],coords[1], inbuf[0], inbuf[1], inbuf[2], inbuf[3] );
+                    if (((*state) == fish1 || (*state)==fish2) && (inbuf[i] == fish1 || inbuf[i]==fish2) ){
+                        (*state) = fishfish;
+                        //printf("Went to case recv second fish\n");
+                    }
+                    if(((*state) == fish1 || (*state) == fish2 || (*state) == fishfish) && inbuf[i]>fish2){
+                        (*gotFish) = (*state);
+                        (*state) = inbuf[i];
+                        //printf("Went to case recv boat after fish\n");
+                    }
+                    if(((*state) == boat1 || (*state) == boat2) && inbuf[i]<boat1){
+                        if((*gotFish) != 0){
+                            (*gotFish) = fishfish;
+                            //printf("Went to case recv fish after boat and had fish already\n");
+                        }else{
+                            (*gotFish) = inbuf[i];
+                            //printf("Went to case recv fish after boat\n");
+                        }
+                    }
+                }
+                
+            }
+        }
+}
+
 int main(int argc, char **argv)
 {
     int numtasks, rank, source, dest, i, tag = 1;
@@ -357,6 +436,13 @@ int main(int argc, char **argv)
     int info[2];
     const int netCapacity = CAPACITY;
     int* pointer;
+    int* statePointer;
+    int* gotFishPointer;
+
+    // vars for wave propagation
+    double waveHeight, waveHeightNew;
+    double waveMap[SIZE] = {0};
+    
 
     MPI_File fh;
     MPI_Info fileInfo;
@@ -438,13 +524,31 @@ int main(int argc, char **argv)
             info[1] = fishCount[1];
             MPI_Send(info, 2, MPI_INT, boatPos[1], tag, MPI_COMM_WORLD);
             // calculate forbidden pos
-            forbiddenPos[0] = 0;
-            forbiddenPos[1] = 0;
-            forbiddenPos[2] = 0;
-            forbiddenPos[3] = 0;
+            forbiddenPos[0] = -1;
+            forbiddenPos[1] = -1;
+            forbiddenPos[2] = -1;
+            forbiddenPos[3] = -1;
             //printf("Calculating blocked cells\n");
             getBlockedCells(boatPos[0], boatPos[1], forbiddenPos);
             //printf("Blocked Cells are %d,%d,%d,%d \n", forbiddenPos[0], forbiddenPos[1], forbiddenPos[2], forbiddenPos[3]);
+
+            //---Process Waves----
+            for(int j=0; j<SIZE;j++){
+                if(waveMap[j]>2.15){
+                    printf("Wave >2.15 encounterd blocking Cell\n");
+                    int found = 0;
+                    for(int k=0;k<3;k++){ //only add stormcells to forbidden list until 3 entries reached -> leave a space to go for ship TODO:
+                        if(!found && forbiddenPos[k]==-1){
+                            forbiddenPos[k] = j;
+                            printf("added stormcells\n");
+                            found = 1;
+                        }else if(k==2 && !found){
+                            printf("didnt add storm cell as to not block boat\n");
+                        }
+                    }
+                }
+            }
+
             // sende aktuell verbotene felder oder -1
             // printf("trying to send msg to %d and %d (boats)", boatPos[0],boatPos[1]);
             MPI_Send(forbiddenPos, 4, MPI_INT, boatPos[0], tag, MPI_COMM_WORLD); //, &reqsHarbor[0]);
@@ -466,6 +570,7 @@ int main(int argc, char **argv)
 
             boatPos[0]=boatPosNew[0];
             boatPos[1]=boatPosNew[1];
+
         }
         if (state == boat1)
         {
@@ -544,11 +649,13 @@ int main(int argc, char **argv)
             
             
             //printf("Recieved following info:%d,%d\n",info[0],info[1]);
-            switch(gotFish){
-                case fish1: info[1]++; break;
-                case fish2: info[1]++; break;
-                case fishfish: info[1] += 2; break;
-                default: break;
+            if(info[1]<netCapacity){
+                switch(gotFish){
+                    case fish1: info[1]++; break;
+                    case fish2: info[1]++; break;
+                    case fishfish: info[1] += 2; break;
+                    default: break;
+                }
             }
             //send new fishcount back
             helper = info[1];
@@ -623,50 +730,29 @@ int main(int argc, char **argv)
         MPI_Waitall(8, reqs, stats);
         // printf("rank= %d with coords= (%d,%d) has sent the following states to its neighbors (u,d,l,r)= %d %d %d %d \n", rank,coords[0],coords[1], outbuf[0], outbuf[1], outbuf[2], outbuf[3] );
         // printf("rank= %d with coords= (%d,%d) has received the following states from its neighbors (u,d,l,r)= %d %d %d %d \n", rank,coords[0],coords[1], inbuf[0], inbuf[1], inbuf[2], inbuf[3] );
-        if (state != land)
-        {
-            gotFish = 0;
-            state = water;
-            i = 0;
-            while(state == water && i<4){
-                switch(inbuf[i]){
-                    case boat1: state = boat1; break;
-                    case boat2: state = boat2; break;
-                    case fish1: state = fish1; break;
-                    case fish2: state = fish2; break;
-                    default: break;
-                }
-                i++;
-            }
-            for(i=i;i<4;i++){
-                if(inbuf[i]!= water){
-                   //printf("Multiple states recv \n");
-                   //printf("rank= %d with coords= (%d,%d) has received the following states from its neighbors (u,d,l,r)= %d %d %d %d \n", rank,coords[0],coords[1], inbuf[0], inbuf[1], inbuf[2], inbuf[3] );
-                    if ((state == fish1 || state==fish2) && (inbuf[i] == fish1 || inbuf[i]==fish2) ){
-                        state = fishfish;
-                        //printf("Went to case recv second fish\n");
-                    }
-                    if((state == fish1 || state == fish2 || state == fishfish) && inbuf[i]>fish2){
-                        gotFish = state;
-                        state = inbuf[i];
-                        //printf("Went to case recv boat after fish\n");
-                    }
-                    if((state == boat1 || state == boat2) && inbuf[i]<boat1){
-                        if(gotFish != 0){
-                            gotFish = fishfish;
-                            //printf("Went to case recv fish after boat and had fish already\n");
-                        }else{
-                            gotFish = inbuf[i];
-                            //printf("Went to case recv fish after boat\n");
-                        }
-                    }
-                }
-                
-            }
-        }
+        
+        //----Updating States----
+        gotFishPointer = &gotFish;
+        statePointer = &state;
+        updateState(inbuf, statePointer, gotFishPointer);
 
+        // ----Wave propagation-----
+
+        if(rank%DIMX == 0){ // if left border of map generate wave that travels through map
+            waveHeight = generateWave(timeStep,rank);
+        }
+        
+        MPI_Sendrecv(&waveHeight,1,MPI_DOUBLE,nbrs[3],1,&waveHeightNew,1,MPI_DOUBLE,nbrs[2],1,MPI_COMM_WORLD,&statusBoats);
+        
+        waveHeight = waveHeightNew;
+        
+        //Lighthouse observes waves // uses gather to get wave hights -> add values of threshhold to forbidden cells;
+        MPI_Gather(&waveHeight,1,MPI_DOUBLE,&waveMap,1,MPI_DOUBLE,harborPos,MPI_COMM_WORLD);
+        
+
+        //------Wait for all processes and then print the map-----
         MPI_Barrier(MPI_COMM_WORLD);
-        // MPI_Gather();
+        
         MPI_Gather(&state, 1, MPI_INT, &recvBuff, 1, MPI_INT, 0, MPI_COMM_WORLD);
         if (rank == 0)
         {
@@ -675,6 +761,11 @@ int main(int argc, char **argv)
             //writeMap(fileInfo, fileName, fh , recvBuff, &timer_global, timeStep);
             printMap(recvBuff);
         }
+        /* UNCOMMENT TO SEE WAVES
+        if(rank == harborPos){
+            printDoubleArray(waveMap);
+        }
+        */
         MPI_Barrier(MPI_COMM_WORLD);
     }
 
