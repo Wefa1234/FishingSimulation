@@ -73,49 +73,50 @@ void printMap(const gridType *map)
     }
     printf("\n\n");
 }
-void writeMap(char *fileName, MPI_File fh ,const gridType *map, double *timer, int step)
+void writeMaps(char *fileName, MPI_File fh ,const gridType *map, const double *mapWave, double *timer, int step)
 {
-    char tile[36];
+    char tile[128];
     char header[128];
     double current_t = MPI_Wtime();
     MPI_Status status;
 
-    snprintf(header,128,"Iteration step: %03d, time: %05.2fs   |\n", step,current_t-*timer);
+    snprintf(header,128,"Iteration step: %03d, time: %05.2fs   |             wavemap\n", step,current_t-*timer);
     MPI_File_write(fh, header,strlen(header), MPI_CHAR,&status);
     for (int i = 0; i < SIZE; i++)
     {
         switch (map[i])
         {
         case 0:
-            snprintf(tile,36,"~~");
+            snprintf(tile,128,"~~");
             break;
         case 1:
-            snprintf(tile,36,"⚓");
+            snprintf(tile,128,"⚓");
             break;
         case 2:
-            snprintf(tile,36,"🐟");
+            snprintf(tile,128,"🐟");
             break;
         case 3:
-            snprintf(tile,36,"🐳");
+            snprintf(tile,128,"🐳");
             break;
         case 4:
-            snprintf(tile,36,"🚤");
+            snprintf(tile,128,"🚤");
             break;
         case 5:
-            snprintf(tile,36,"🦆");
+            snprintf(tile,128,"🦆");
             break;
         case 6:
-            snprintf(tile,36,"🐟");
+            snprintf(tile,128,"🐟");
             break;
         }
         MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
 
         if (i != 0 && i % DIMX == DIMX - 1){
-            snprintf(tile,36,"                        |\n");
+	    int j = i;	
+            snprintf(tile,128,"                        |  %.2f  %.2f  %.2f  %.2f  %.2f  %.2f \n",mapWave[j-5], mapWave[j-4], mapWave[j-3], mapWave[j-2], mapWave[j-1], mapWave[j]);
             MPI_File_write(fh, tile, strlen(tile), MPI_CHAR,&status);
         }
     }
-    snprintf(header,36,"\n\n");
+    snprintf(header,128,"\n\n");
     MPI_File_write(fh, header,strlen(header), MPI_CHAR,&status);
 }
 
@@ -802,17 +803,17 @@ int main(int argc, char **argv)
         //------Wait for all processes and then print the map-----
         MPI_Barrier(MPI_COMM_WORLD);
         
-        MPI_Gather(&state, 1, MPI_INT, &recvBuff, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        if (rank == 0)
+        MPI_Gather(&state, 1, MPI_INT, &recvBuff, 1, MPI_INT, harborPos, MPI_COMM_WORLD);
+        if (rank == harborPos)
         {
-            writeMap(fileNameMap, fhMap, recvBuff, &timer_global, timeStep);
+            writeMaps(fileNameMap, fhMap, recvBuff, waveMap, &timer_global, timeStep);
             printMap(recvBuff);
-        }
-        // UNCOMMENT TO SEE WAVES
-        if(rank == harborPos){
+        
+        //UNCOMMENT TO SEE WAVES 
             printDoubleArray(waveMap);
         }
         
+
         MPI_Barrier(MPI_COMM_WORLD);
     }
 
